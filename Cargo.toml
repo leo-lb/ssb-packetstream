@@ -11,10 +11,10 @@ readme = "README.md"
 keywords = ["packet-stream", "muxrpc", "ssb", "scuttlebutt"]
 
 [dependencies]
-async-trait = "0.1.21"
-byteorder = "1.3.1"
+async-trait = "0.1.22"
+byteorder = "1.3.2"
 futures = "0.3.1"
-snafu = { version = "0.6.0", features = ["futures"] }
+snafu = { version = "0.6.2", features = ["futures"] }
 
 [dev-dependencies]
 async-ringbuffer = { version = "~0.5.2", git = "https://github.com/leo-lb/async-ringbuffer" }
