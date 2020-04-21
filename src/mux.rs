@@ -9,6 +9,7 @@ use futures::stream::{Stream, StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::error;
 use std::sync::Arc;
+use futures::lock::Mutex;
 
 use snafu::{futures::TryStreamExt as _, ResultExt, Snafu};
 
@@ -54,9 +55,10 @@ fn child_sink_map() -> ChildSinkMap {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
+#[derive(Clone)]
 pub struct Sender {
     inner: mpsc::Sender<Packet>,
-    _id: i32,
+    _id: Arc<Mutex<i32>>,
     response_sinks: ChildSinkMap,
 }
 
@@ -64,20 +66,20 @@ impl Sender {
     fn new(inner: mpsc::Sender<Packet>, response_sinks: ChildSinkMap) -> Sender {
         Sender {
             inner,
-            _id: 1,
+            _id: Arc::new(Mutex::new(0)),
             response_sinks,
         }
     }
 
-    fn next_id(&mut self) -> i32 {
-        let id = self._id;
+    async fn next_id(&mut self) -> i32 {
 
         // TODO: check js behavior
-        self._id = match self._id.checked_add(1) {
+        let mut id = self._id.lock().await;
+        *id = match id.checked_add(1) {
             None => 1,
             Some(i) => i,
         };
-        id
+        *id 
     }
 
     async fn new_response_stream(&mut self, request_id: i32) -> ChildReceiver {
@@ -86,6 +88,7 @@ impl Sender {
             .lock()
             .await
             .insert(-request_id, in_sink);
+
         in_stream
     }
 
@@ -100,7 +103,7 @@ impl Sender {
         body_type: BodyType,
         body: Vec<u8>,
     ) -> Result<ChildReceiver, SendError> {
-        let out_id = self.next_id();
+        let out_id = self.next_id().await;
         let in_stream = self.new_response_stream(out_id).await;
 
         let p = Packet::new(IsStream::No, IsEnd::No, body_type, out_id, body);
@@ -113,7 +116,8 @@ impl Sender {
         body_type: BodyType,
         body: Vec<u8>,
     ) -> Result<(ChildSender, ChildReceiver), SendError> {
-        let out_id = self.next_id();
+        let out_id = self.next_id().await;
+        eprintln!("next id is {}", out_id);
         let in_stream = self.new_response_stream(out_id).await;
 
         let mut out = ChildSender {
@@ -127,13 +131,9 @@ impl Sender {
     }
 }
 
-impl Drop for Sender {
-    fn drop(&mut self) {
-        self.close();
-    }
-}
 
 // TODO: name
+#[derive(Clone)]
 pub struct ChildSender {
     id: i32,
     is_stream: IsStream,
@@ -239,7 +239,7 @@ where
     let done = async move {
         let in_stream = PacketStream::new(r);
 
-        const OPEN_STREAMS_LIMIT: usize = 128;
+        const OPEN_STREAMS_LIMIT: usize = 2048;
         let in_done =
             in_stream
                 .context(Incoming)
@@ -296,7 +296,7 @@ where
 }
 
 fn channel<T>() -> (mpsc::Sender<T>, mpsc::Receiver<T>) {
-    mpsc::channel::<T>(128) // Arbitrary
+    mpsc::channel::<T>(4096) // Arbitrary
 }
 
 #[cfg(test)]
